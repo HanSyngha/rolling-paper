@@ -13,7 +13,8 @@ export type GroupId =
   | 'GTE'
   | 'TDE'
   | '공정'
-  | '직속';
+  | '개발지원과'
+  | 'Staff';
 
 export interface Group {
   id: GroupId;
@@ -47,5 +48,6 @@ export const GROUPS: Group[] = [
   { id: 'GTE', name: 'GTE', description: 'GTE 그룹', color: 'bg-indigo-100' },
   { id: 'TDE', name: 'TDE', description: 'TDE 그룹', color: 'bg-violet-100' },
   { id: '공정', name: '공정', description: '공정 그룹', color: 'bg-purple-100' },
-  { id: '직속', name: '직속', description: '직속 그룹', color: 'bg-pink-100' },
+  { id: '개발지원과', name: '개발지원과', description: '개발지원과 그룹', color: 'bg-pink-100' },
+  { id: 'Staff', name: 'Staff', description: 'Staff 그룹', color: 'bg-rose-100' },
 ];
