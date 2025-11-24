@@ -3,7 +3,7 @@ import Header from './components/Header';
 import GroupSelector from './components/GroupSelector';
 import MessageList from './components/MessageList';
 import WriteModal from './components/WriteModal';
-import { mockBackend } from './services/mockBackend';
+import { backend } from './services/backend';
 import { Message, GroupId } from './types';
 
 function App() {
@@ -12,21 +12,18 @@ function App() {
   const [isWriteModalOpen, setIsWriteModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Subscribe to real-time updates (Local Storage Events)
+  // Subscribe to real-time updates and load messages from file system
   useEffect(() => {
     setIsLoading(true);
-    // Mimic initial fetch delay
-    setTimeout(() => {
-        const unsubscribe = mockBackend.subscribe((updatedMessages) => {
-            setMessages(updatedMessages);
-            setIsLoading(false);
-        });
-        return () => unsubscribe();
-    }, 500);
+    const unsubscribe = backend.subscribe((updatedMessages) => {
+        setMessages(updatedMessages);
+        setIsLoading(false);
+    });
+    return () => unsubscribe();
   }, []);
 
   const handleLike = (id: string) => {
-    mockBackend.likeMessage(id);
+    backend.likeMessage(id);
   };
 
   const filteredMessages = useMemo(() => {

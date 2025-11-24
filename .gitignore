@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# Message storage (contains user data)
+messages/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

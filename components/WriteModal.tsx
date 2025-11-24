@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { GROUPS, GroupId, Message } from '../types';
-import { mockBackend } from '../services/mockBackend';
+import { backend } from '../services/backend';
 
 interface WriteModalProps {
   isOpen: boolean;
@@ -22,25 +22,28 @@ const WriteModal: React.FC<WriteModalProps> = ({ isOpen, onClose, preSelectedGro
 
     setIsSubmitting(true);
 
-    // Simulate network delay
-    await new Promise(resolve => setTimeout(resolve, 800));
+    try {
+      const newMessage: Message = {
+        id: `msg_${Date.now()}`,
+        author,
+        group: group as GroupId,
+        content,
+        timestamp: Date.now(),
+        likes: 0
+      };
 
-    const newMessage: Message = {
-      id: `msg_${Date.now()}`,
-      author,
-      group: group as GroupId,
-      content,
-      timestamp: Date.now(),
-      likes: 0
-    };
+      await backend.addMessage(newMessage);
 
-    mockBackend.addMessage(newMessage);
-    
-    // Reset and close
-    setAuthor('');
-    setContent('');
-    setIsSubmitting(false);
-    onClose();
+      // Reset and close
+      setAuthor('');
+      setContent('');
+      onClose();
+    } catch (error) {
+      console.error('Failed to save message:', error);
+      alert('메시지 저장에 실패했습니다. 다시 시도해주세요.');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
