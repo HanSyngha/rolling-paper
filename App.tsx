@@ -54,9 +54,17 @@ function App() {
 
     setVerifiedPassword(password);
 
-    if (passwordModalAction === 'edit') {
-      setIsEditModalOpen(true);
-    } else if (passwordModalAction === 'delete') {
+    // Close password modal first
+    const action = passwordModalAction;
+    setPasswordModalAction(null);
+
+    // Then handle the action
+    if (action === 'edit') {
+      // Use setTimeout to ensure password modal is closed before opening edit modal
+      setTimeout(() => {
+        setIsEditModalOpen(true);
+      }, 100);
+    } else if (action === 'delete') {
       try {
         await backend.deleteMessage(selectedMessage.id, password);
         alert('메시지가 삭제되었습니다.');
@@ -65,8 +73,6 @@ function App() {
         alert('메시지 삭제에 실패했습니다.');
       }
     }
-
-    setPasswordModalAction(null);
   };
 
   const handlePasswordModalClose = () => {
