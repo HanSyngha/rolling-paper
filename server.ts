@@ -66,14 +66,38 @@ function appendMessage(message: Message): void {
 // Helper: Save message to group TXT file (human-readable format)
 function saveToGroupTxt(message: Message): void {
   const groupTxtFile = join(MESSAGE_DIR, `${message.group}.txt`);
-  const timestamp = new Date(message.timestamp).toLocaleString('ko-KR');
-  const txtLine = `[${timestamp}] ${message.author}: ${message.content}\n`;
+  const txtLine = `[${message.author}]: ${message.content}\n`;
 
   if (existsSync(groupTxtFile)) {
     appendFileSync(groupTxtFile, txtLine, 'utf-8');
   } else {
     writeFileSync(groupTxtFile, txtLine, 'utf-8');
   }
+}
+
+// Helper: Rebuild all group TXT files from current messages
+function rebuildGroupTxtFiles(): void {
+  const messages = readMessages();
+  const groupedMessages: Record<string, Message[]> = {};
+
+  // Group messages by group
+  messages.forEach(msg => {
+    if (!groupedMessages[msg.group]) {
+      groupedMessages[msg.group] = [];
+    }
+    groupedMessages[msg.group].push(msg);
+  });
+
+  // Write each group's TXT file
+  Object.entries(groupedMessages).forEach(([group, msgs]) => {
+    const groupTxtFile = join(MESSAGE_DIR, `${group}.txt`);
+    const content = msgs
+      .reverse() // Oldest first
+      .map(msg => `[${msg.author}]: ${msg.content}`)
+      .join('\n') + '\n';
+
+    writeFileSync(groupTxtFile, content, 'utf-8');
+  });
 }
 
 // Helper: Update entire JSONL file (for likes)
@@ -226,6 +250,9 @@ app.put('/api/messages/:id', (req, res) => {
     // Update JSONL file
     updateMessages(messages);
 
+    // Rebuild TXT files
+    rebuildGroupTxtFiles();
+
     const { passwordHash, ...sanitizedMessage } = message;
     res.json(sanitizedMessage);
   } catch (error) {
@@ -267,6 +294,9 @@ app.delete('/api/messages/:id', (req, res) => {
     // Update JSONL file
     updateMessages(messages);
 
+    // Rebuild TXT files
+    rebuildGroupTxtFiles();
+
     res.json({ message: 'Message deleted successfully' });
   } catch (error) {
     console.error('Error deleting message:', error);
@@ -278,4 +308,8 @@ app.delete('/api/messages/:id', (req, res) => {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
   console.log(`📁 Messages stored in: ${MESSAGE_DIR}`);
+
+  // Rebuild TXT files on startup
+  rebuildGroupTxtFiles();
+  console.log(`📝 Group TXT files rebuilt`);
 });
