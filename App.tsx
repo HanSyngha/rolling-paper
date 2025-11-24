@@ -3,6 +3,8 @@ import Header from './components/Header';
 import GroupSelector from './components/GroupSelector';
 import MessageList from './components/MessageList';
 import WriteModal from './components/WriteModal';
+import PasswordModal from './components/PasswordModal';
+import EditModal from './components/EditModal';
 import { backend } from './services/backend';
 import { Message, GroupId } from './types';
 
@@ -11,6 +13,12 @@ function App() {
   const [selectedGroup, setSelectedGroup] = useState<GroupId | 'all'>('all');
   const [isWriteModalOpen, setIsWriteModalOpen] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+
+  // Edit/Delete states
+  const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
+  const [passwordModalAction, setPasswordModalAction] = useState<'edit' | 'delete' | null>(null);
+  const [verifiedPassword, setVerifiedPassword] = useState<string>('');
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 
   // Subscribe to real-time updates and load messages from file system
   useEffect(() => {
@@ -24,6 +32,52 @@ function App() {
 
   const handleLike = (id: string) => {
     backend.likeMessage(id);
+  };
+
+  const handleEdit = (message: Message) => {
+    setSelectedMessage(message);
+    setPasswordModalAction('edit');
+  };
+
+  const handleDelete = (message: Message) => {
+    setSelectedMessage(message);
+    setPasswordModalAction('delete');
+  };
+
+  const handlePasswordVerify = async (password: string): Promise<boolean> => {
+    if (!selectedMessage) return false;
+    return await backend.verifyPassword(selectedMessage.id, password);
+  };
+
+  const handlePasswordSuccess = async (password: string) => {
+    if (!selectedMessage) return;
+
+    setVerifiedPassword(password);
+
+    if (passwordModalAction === 'edit') {
+      setIsEditModalOpen(true);
+    } else if (passwordModalAction === 'delete') {
+      try {
+        await backend.deleteMessage(selectedMessage.id, password);
+        alert('메시지가 삭제되었습니다.');
+      } catch (error) {
+        console.error('Failed to delete message:', error);
+        alert('메시지 삭제에 실패했습니다.');
+      }
+    }
+
+    setPasswordModalAction(null);
+  };
+
+  const handlePasswordModalClose = () => {
+    setPasswordModalAction(null);
+    setSelectedMessage(null);
+  };
+
+  const handleEditModalClose = () => {
+    setIsEditModalOpen(false);
+    setSelectedMessage(null);
+    setVerifiedPassword('');
   };
 
   const filteredMessages = useMemo(() => {
@@ -76,9 +130,11 @@ function App() {
                         }
                     </h3>
                 </div>
-                <MessageList 
-                    messages={filteredMessages} 
-                    onLike={handleLike} 
+                <MessageList
+                    messages={filteredMessages}
+                    onLike={handleLike}
+                    onEdit={handleEdit}
+                    onDelete={handleDelete}
                 />
             </div>
         )}
@@ -96,10 +152,32 @@ function App() {
       </div>
 
       {/* Write Modal */}
-      <WriteModal 
-        isOpen={isWriteModalOpen} 
+      <WriteModal
+        isOpen={isWriteModalOpen}
         onClose={() => setIsWriteModalOpen(false)}
         preSelectedGroup={selectedGroup}
+      />
+
+      {/* Password Verification Modal */}
+      <PasswordModal
+        isOpen={passwordModalAction !== null}
+        onClose={handlePasswordModalClose}
+        onVerify={handlePasswordVerify}
+        onSuccess={handlePasswordSuccess}
+        title={passwordModalAction === 'edit' ? '메시지 수정' : '메시지 삭제'}
+        description={
+          passwordModalAction === 'edit'
+            ? '메시지를 수정하려면 비밀번호를 입력하세요.'
+            : '메시지를 삭제하려면 비밀번호를 입력하세요.'
+        }
+      />
+
+      {/* Edit Modal */}
+      <EditModal
+        isOpen={isEditModalOpen}
+        onClose={handleEditModalClose}
+        message={selectedMessage}
+        password={verifiedPassword}
       />
 
       <footer className="bg-white border-t border-border-light py-8 text-center mt-auto">

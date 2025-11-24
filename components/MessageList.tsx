@@ -4,9 +4,11 @@ import { Message, GROUPS } from '../types';
 interface MessageListProps {
   messages: Message[];
   onLike: (id: string) => void;
+  onEdit: (message: Message) => void;
+  onDelete: (message: Message) => void;
 }
 
-const MessageList: React.FC<MessageListProps> = ({ messages, onLike }) => {
+const MessageList: React.FC<MessageListProps> = ({ messages, onLike, onEdit, onDelete }) => {
   if (messages.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center animate-fade-in">
@@ -57,15 +59,37 @@ const MessageList: React.FC<MessageListProps> = ({ messages, onLike }) => {
                   <p className="text-text-main font-bold text-sm mb-0.5">{msg.author} <span className="text-gray-400 font-normal">드림</span></p>
                   <p className="text-text-sub text-xs">{formatDate(msg.timestamp)}</p>
                 </div>
-                
-                {/* Like Button (Simple Interaction) */}
-                <button 
-                  onClick={() => onLike(msg.id)}
-                  className="flex items-center gap-1 text-gray-400 hover:text-red-500 transition-colors"
-                >
-                  <span className={`material-symbols-outlined text-lg ${msg.likes > 0 ? 'fill-current text-red-500' : ''}`}>favorite</span>
-                  <span className="text-xs font-medium">{msg.likes > 0 ? msg.likes : ''}</span>
-                </button>
+
+                {/* Action Buttons */}
+                <div className="flex items-center gap-1">
+                  {/* Edit Button */}
+                  <button
+                    onClick={() => onEdit(msg)}
+                    className="p-1.5 text-gray-400 hover:text-blue-500 hover:bg-blue-50 rounded-lg transition-colors"
+                    title="수정하기"
+                  >
+                    <span className="material-symbols-outlined text-base">edit</span>
+                  </button>
+
+                  {/* Delete Button */}
+                  <button
+                    onClick={() => onDelete(msg)}
+                    className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                    title="삭제하기"
+                  >
+                    <span className="material-symbols-outlined text-base">delete</span>
+                  </button>
+
+                  {/* Like Button */}
+                  <button
+                    onClick={() => onLike(msg.id)}
+                    className="p-1.5 flex items-center gap-1 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                    title="좋아요"
+                  >
+                    <span className={`material-symbols-outlined text-base ${msg.likes > 0 ? 'fill-current text-red-500' : ''}`}>favorite</span>
+                    {msg.likes > 0 && <span className="text-xs font-medium">{msg.likes}</span>}
+                  </button>
+                </div>
               </div>
             </div>
           </div>

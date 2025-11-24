@@ -25,3 +25,4 @@ messages/
 *.njsproj
 *.sln
 *.sw?
+.playwright-mcp/

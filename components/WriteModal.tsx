@@ -12,6 +12,7 @@ const WriteModal: React.FC<WriteModalProps> = ({ isOpen, onClose, preSelectedGro
   const [author, setAuthor] = useState('');
   const [group, setGroup] = useState<GroupId | ''>(preSelectedGroup !== 'all' ? preSelectedGroup : '');
   const [content, setContent] = useState('');
+  const [password, setPassword] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isOpen) return null;
@@ -32,11 +33,12 @@ const WriteModal: React.FC<WriteModalProps> = ({ isOpen, onClose, preSelectedGro
         likes: 0
       };
 
-      await backend.addMessage(newMessage);
+      await backend.addMessage(newMessage, password || undefined);
 
       // Reset and close
       setAuthor('');
       setContent('');
+      setPassword('');
       onClose();
     } catch (error) {
       console.error('Failed to save message:', error);
@@ -127,6 +129,25 @@ const WriteModal: React.FC<WriteModalProps> = ({ isOpen, onClose, preSelectedGro
                 placeholder="팀장님께 전하고 싶은 마음을 여기에 적어주세요."
                 className="w-full min-h-[160px] p-4 rounded-lg border border-border-light focus:border-primary focus:ring-2 focus:ring-primary/20 bg-white resize-none transition-all outline-none"
               ></textarea>
+            </div>
+
+            {/* Password (Optional) */}
+            <div className="flex flex-col gap-2 bg-blue-50 p-4 rounded-lg border border-blue-100">
+              <label htmlFor="password" className="text-base font-medium text-text-main flex items-center gap-2">
+                <span className="material-symbols-outlined text-blue-600">lock</span>
+                <span>비밀번호 (선택사항)</span>
+              </label>
+              <input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="나중에 수정/삭제하려면 비밀번호를 설정하세요"
+                className="w-full h-12 px-4 rounded-lg border border-blue-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 bg-white transition-all outline-none"
+              />
+              <p className="text-xs text-blue-600">
+                💡 비밀번호를 설정하면 나중에 메시지를 수정하거나 삭제할 수 있습니다.
+              </p>
             </div>
 
           </form>

@@ -28,6 +28,7 @@ export interface Message {
   content: string;
   timestamp: number;
   likes: number;
+  passwordHash?: string; // Hashed password for edit/delete protection
 }
 
 export const GROUPS: Group[] = [
