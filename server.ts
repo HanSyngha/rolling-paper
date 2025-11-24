@@ -11,8 +11,13 @@ const __dirname = dirname(__filename);
 const app = express();
 const PORT = 3001;
 
-// Middleware
-app.use(cors());
+// Middleware - Allow all CORS requests
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: false
+}));
 app.use(express.json());
 
 // Message storage paths
