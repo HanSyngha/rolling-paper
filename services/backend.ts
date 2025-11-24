@@ -2,10 +2,43 @@ import { Message } from '../types';
 
 const API_BASE_URL = 'http://localhost:3001/api';
 
+// Retry helper function with exponential backoff
+async function fetchWithRetry(
+  url: string,
+  options?: RequestInit,
+  maxRetries = 5,
+  initialDelay = 500
+): Promise<Response> {
+  let lastError: Error | null = null;
+
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const response = await fetch(url, options);
+
+      // If server responds (even with error), return the response
+      return response;
+    } catch (error) {
+      lastError = error as Error;
+
+      // If this is the last retry, throw the error
+      if (i === maxRetries - 1) {
+        throw lastError;
+      }
+
+      // Wait before retrying with exponential backoff
+      const delay = initialDelay * Math.pow(1.5, i);
+      console.log(`Retry ${i + 1}/${maxRetries} after ${delay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+
+  throw lastError || new Error('Fetch failed');
+}
+
 export const backend = {
   getMessages: async (): Promise<Message[]> => {
     try {
-      const response = await fetch(`${API_BASE_URL}/messages`);
+      const response = await fetchWithRetry(`${API_BASE_URL}/messages`);
       if (!response.ok) {
         throw new Error('Failed to fetch messages');
       }
@@ -18,13 +51,18 @@ export const backend = {
 
   addMessage: async (message: Message): Promise<Message> => {
     try {
-      const response = await fetch(`${API_BASE_URL}/messages`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
+      const response = await fetchWithRetry(
+        `${API_BASE_URL}/messages`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(message),
         },
-        body: JSON.stringify(message),
-      });
+        3, // Fewer retries for write operations
+        1000 // Longer initial delay
+      );
 
       if (!response.ok) {
         throw new Error('Failed to add message');
@@ -44,7 +82,7 @@ export const backend = {
 
   likeMessage: async (id: string): Promise<void> => {
     try {
-      const response = await fetch(`${API_BASE_URL}/messages/${id}/like`, {
+      const response = await fetchWithRetry(`${API_BASE_URL}/messages/${id}/like`, {
         method: 'POST',
       });
 
