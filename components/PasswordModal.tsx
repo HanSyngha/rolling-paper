@@ -34,9 +34,9 @@ const PasswordModal: React.FC<PasswordModalProps> = ({
       const isValid = await onVerify(password);
 
       if (isValid) {
-        onSuccess(password);
         setPassword('');
-        onClose();
+        onSuccess(password);
+        // onClose is called from parent after handling the action
       } else {
         setError('비밀번호가 일치하지 않습니다.');
       }
