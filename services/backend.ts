@@ -168,6 +168,39 @@ export const backend = {
     }
   },
 
+  downloadTxtFiles: async (password: string): Promise<void> => {
+    try {
+      const response = await fetchWithRetry(`${API_BASE_URL}/download-txt`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ password }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to download files');
+      }
+
+      // Get the blob from response
+      const blob = await response.blob();
+
+      // Create a download link
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'messages.zip';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Error downloading TXT files:', error);
+      throw error;
+    }
+  },
+
   // Subscribe to changes
   subscribe: (callback: (messages: Message[]) => void) => {
     const handler = async () => {

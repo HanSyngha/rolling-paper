@@ -1,9 +1,10 @@
 import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import archiver from 'archiver';
 import type { Message } from './types';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -11,6 +12,7 @@ const __dirname = dirname(__filename);
 
 const app = express();
 const PORT = 3001;
+const DOWNLOAD_PASSWORD = 'dt2025-pw';
 
 // Middleware - Allow all CORS requests
 app.use(cors({
@@ -301,6 +303,58 @@ app.delete('/api/messages/:id', (req, res) => {
   } catch (error) {
     console.error('Error deleting message:', error);
     res.status(500).json({ error: 'Failed to delete message' });
+  }
+});
+
+// Download all TXT files as ZIP
+app.post('/api/download-txt', (req, res) => {
+  try {
+    const { password } = req.body;
+
+    if (!password) {
+      return res.status(400).json({ error: 'Password is required' });
+    }
+
+    if (password !== DOWNLOAD_PASSWORD) {
+      return res.status(401).json({ error: 'Invalid password' });
+    }
+
+    // Get all TXT files
+    const files = readdirSync(MESSAGE_DIR).filter(file => file.endsWith('.txt'));
+
+    if (files.length === 0) {
+      return res.status(404).json({ error: 'No TXT files found' });
+    }
+
+    // Set response headers for ZIP download
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename=messages.zip');
+
+    // Create ZIP archive
+    const archive = archiver('zip', {
+      zlib: { level: 9 } // Maximum compression
+    });
+
+    // Handle archiver errors
+    archive.on('error', (err) => {
+      console.error('Archive error:', err);
+      res.status(500).json({ error: 'Failed to create ZIP file' });
+    });
+
+    // Pipe archive to response
+    archive.pipe(res);
+
+    // Add each TXT file to the archive
+    files.forEach(file => {
+      const filePath = join(MESSAGE_DIR, file);
+      archive.file(filePath, { name: file });
+    });
+
+    // Finalize the archive
+    archive.finalize();
+  } catch (error) {
+    console.error('Error downloading TXT files:', error);
+    res.status(500).json({ error: 'Failed to download TXT files' });
   }
 });
 

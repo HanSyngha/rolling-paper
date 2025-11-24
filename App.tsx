@@ -16,7 +16,7 @@ function App() {
 
   // Edit/Delete states
   const [selectedMessage, setSelectedMessage] = useState<Message | null>(null);
-  const [passwordModalAction, setPasswordModalAction] = useState<'edit' | 'delete' | null>(null);
+  const [passwordModalAction, setPasswordModalAction] = useState<'edit' | 'delete' | 'download' | null>(null);
   const [verifiedPassword, setVerifiedPassword] = useState<string>('');
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
 
@@ -45,13 +45,17 @@ function App() {
   };
 
   const handlePasswordVerify = async (password: string): Promise<boolean> => {
+    // For download action, no message verification needed - just return true
+    // The server will verify the download password
+    if (passwordModalAction === 'download') {
+      return true;
+    }
+
     if (!selectedMessage) return false;
     return await backend.verifyPassword(selectedMessage.id, password);
   };
 
   const handlePasswordSuccess = async (password: string) => {
-    if (!selectedMessage) return;
-
     setVerifiedPassword(password);
 
     // Close password modal first
@@ -60,17 +64,26 @@ function App() {
 
     // Then handle the action
     if (action === 'edit') {
+      if (!selectedMessage) return;
       // Use setTimeout to ensure password modal is closed before opening edit modal
       setTimeout(() => {
         setIsEditModalOpen(true);
       }, 100);
     } else if (action === 'delete') {
+      if (!selectedMessage) return;
       try {
         await backend.deleteMessage(selectedMessage.id, password);
         alert('메시지가 삭제되었습니다.');
       } catch (error) {
         console.error('Failed to delete message:', error);
         alert('메시지 삭제에 실패했습니다.');
+      }
+    } else if (action === 'download') {
+      try {
+        await backend.downloadTxtFiles(password);
+      } catch (error) {
+        console.error('Failed to download files:', error);
+        alert('파일 다운로드에 실패했습니다. 비밀번호를 확인해주세요.');
       }
     }
   };
@@ -86,6 +99,10 @@ function App() {
     setVerifiedPassword('');
   };
 
+  const handleDownload = () => {
+    setPasswordModalAction('download');
+  };
+
   const filteredMessages = useMemo(() => {
     if (selectedGroup === 'all') return messages;
     return messages.filter(m => m.group === selectedGroup);
@@ -93,7 +110,7 @@ function App() {
 
   return (
     <div className="min-h-screen flex flex-col font-sans">
-      <Header />
+      <Header onDownload={handleDownload} />
       
       <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8 md:py-12">
         {/* Hero Section */}
@@ -170,11 +187,15 @@ function App() {
         onClose={handlePasswordModalClose}
         onVerify={handlePasswordVerify}
         onSuccess={handlePasswordSuccess}
-        title={passwordModalAction === 'edit' ? '메시지 수정' : '메시지 삭제'}
+        title={
+          passwordModalAction === 'edit' ? '메시지 수정' :
+          passwordModalAction === 'delete' ? '메시지 삭제' :
+          'TXT 파일 다운로드'
+        }
         description={
-          passwordModalAction === 'edit'
-            ? '메시지를 수정하려면 비밀번호를 입력하세요.'
-            : '메시지를 삭제하려면 비밀번호를 입력하세요.'
+          passwordModalAction === 'edit' ? '메시지를 수정하려면 비밀번호를 입력하세요.' :
+          passwordModalAction === 'delete' ? '메시지를 삭제하려면 비밀번호를 입력하세요.' :
+          'TXT 파일을 다운로드하려면 비밀번호를 입력하세요.'
         }
       />
 
