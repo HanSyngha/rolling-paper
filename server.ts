@@ -1,10 +1,15 @@
 import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import pg from 'pg';
 import { createClient } from 'redis';
 import archiver from 'archiver';
 import type { Message } from './types';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const { Pool } = pg;
 
@@ -537,6 +542,18 @@ app.post('/api/download-txt', async (req, res) => {
   } catch (error) {
     console.error('Error downloading TXT files:', error);
     res.status(500).json({ error: 'Failed to download TXT files' });
+  }
+});
+
+// ============ Static File Serving (Production) ============
+// Serve static files from the dist folder
+app.use(express.static(path.join(__dirname, 'dist')));
+
+// Handle SPA routing - serve index.html for all non-API routes
+app.get('*', (req, res) => {
+  // Only serve index.html for non-API requests
+  if (!req.path.startsWith('/api')) {
+    res.sendFile(path.join(__dirname, 'dist', 'index.html'));
   }
 });
 
