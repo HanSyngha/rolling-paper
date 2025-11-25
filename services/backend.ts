@@ -231,8 +231,8 @@ export const backend = {
     // Initial call
     localHandler();
 
-    // Poll for changes from other tabs/browsers every 5 seconds
-    const pollInterval = setInterval(handler, 5000);
+    // Poll for changes from other tabs/browsers every 1 second
+    const pollInterval = setInterval(handler, 1000);
 
     return () => {
       window.removeEventListener('message-update', localHandler);
