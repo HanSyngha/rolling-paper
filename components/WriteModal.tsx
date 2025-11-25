@@ -13,6 +13,7 @@ const WriteModal: React.FC<WriteModalProps> = ({ isOpen, onClose, preSelectedGro
   const [group, setGroup] = useState<GroupId | ''>(preSelectedGroup !== 'all' ? preSelectedGroup : '');
   const [content, setContent] = useState('');
   const [password, setPassword] = useState('');
+  const [isPrivate, setIsPrivate] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   if (!isOpen) return null;
@@ -20,6 +21,12 @@ const WriteModal: React.FC<WriteModalProps> = ({ isOpen, onClose, preSelectedGro
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!author || !group || !content) return;
+
+    // 비공개 메시지는 비밀번호 필수
+    if (isPrivate && !password) {
+      alert('비공개 메시지는 비밀번호가 필요합니다.');
+      return;
+    }
 
     setIsSubmitting(true);
 
@@ -33,12 +40,13 @@ const WriteModal: React.FC<WriteModalProps> = ({ isOpen, onClose, preSelectedGro
         likes: 0
       };
 
-      await backend.addMessage(newMessage, password || undefined);
+      await backend.addMessage(newMessage, password || undefined, isPrivate);
 
       // Reset and close
       setAuthor('');
       setContent('');
       setPassword('');
+      setIsPrivate(false);
       onClose();
     } catch (error) {
       console.error('Failed to save message:', error);
@@ -131,22 +139,72 @@ const WriteModal: React.FC<WriteModalProps> = ({ isOpen, onClose, preSelectedGro
               ></textarea>
             </div>
 
-            {/* Password (Optional) */}
-            <div className="flex flex-col gap-2 bg-blue-50 p-4 rounded-lg border border-blue-100">
+            {/* 공개/비공개 선택 */}
+            <div className="flex flex-col gap-3 bg-gray-50 p-4 rounded-lg border border-gray-200">
+              <label className="text-base font-medium text-text-main flex items-center gap-2">
+                <span className="material-symbols-outlined text-gray-600">visibility</span>
+                <span>공개 설정</span>
+              </label>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setIsPrivate(false)}
+                  className={`flex-1 py-3 px-4 rounded-lg border-2 transition-all flex items-center justify-center gap-2 ${
+                    !isPrivate
+                      ? 'border-green-500 bg-green-50 text-green-700'
+                      : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'
+                  }`}
+                >
+                  <span className="material-symbols-outlined text-lg">visibility</span>
+                  <span className="font-medium">공개</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsPrivate(true)}
+                  className={`flex-1 py-3 px-4 rounded-lg border-2 transition-all flex items-center justify-center gap-2 ${
+                    isPrivate
+                      ? 'border-purple-500 bg-purple-50 text-purple-700'
+                      : 'border-gray-200 bg-white text-gray-500 hover:border-gray-300'
+                  }`}
+                >
+                  <span className="material-symbols-outlined text-lg">visibility_off</span>
+                  <span className="font-medium">비공개</span>
+                </button>
+              </div>
+              <p className="text-xs text-gray-500">
+                {isPrivate
+                  ? '비공개 메시지는 비밀번호를 입력해야 내용을 볼 수 있습니다.'
+                  : '공개 메시지는 모든 사람이 내용을 볼 수 있습니다.'}
+              </p>
+            </div>
+
+            {/* Password */}
+            <div className={`flex flex-col gap-2 p-4 rounded-lg border ${
+              isPrivate
+                ? 'bg-purple-50 border-purple-200'
+                : 'bg-blue-50 border-blue-100'
+            }`}>
               <label htmlFor="password" className="text-base font-medium text-text-main flex items-center gap-2">
-                <span className="material-symbols-outlined text-blue-600">lock</span>
-                <span>비밀번호 (선택사항)</span>
+                <span className={`material-symbols-outlined ${isPrivate ? 'text-purple-600' : 'text-blue-600'}`}>lock</span>
+                <span>비밀번호 {isPrivate ? '(필수)' : '(선택사항)'}</span>
               </label>
               <input
                 id="password"
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="나중에 수정/삭제하려면 비밀번호를 설정하세요"
-                className="w-full h-12 px-4 rounded-lg border border-blue-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 bg-white transition-all outline-none"
+                required={isPrivate}
+                placeholder={isPrivate ? '비공개 메시지를 볼 수 있는 비밀번호' : '나중에 수정/삭제하려면 비밀번호를 설정하세요'}
+                className={`w-full h-12 px-4 rounded-lg border focus:ring-2 bg-white transition-all outline-none ${
+                  isPrivate
+                    ? 'border-purple-200 focus:border-purple-500 focus:ring-purple-500/20'
+                    : 'border-blue-200 focus:border-blue-500 focus:ring-blue-500/20'
+                }`}
               />
-              <p className="text-xs text-blue-600">
-                💡 비밀번호를 설정하면 나중에 메시지를 수정하거나 삭제할 수 있습니다.
+              <p className={`text-xs ${isPrivate ? 'text-purple-600' : 'text-blue-600'}`}>
+                {isPrivate
+                  ? '이 비밀번호를 입력해야 메시지 내용을 볼 수 있습니다.'
+                  : '비밀번호를 설정하면 나중에 메시지를 수정하거나 삭제할 수 있습니다.'}
               </p>
             </div>
 

@@ -51,7 +51,7 @@ export const backend = {
     }
   },
 
-  addMessage: async (message: Message, password?: string): Promise<Message> => {
+  addMessage: async (message: Message, password?: string, isPrivate?: boolean): Promise<Message> => {
     try {
       const response = await fetchWithRetry(
         `${API_BASE_URL}/messages`,
@@ -60,7 +60,7 @@ export const backend = {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ ...message, password }),
+          body: JSON.stringify({ ...message, password, isPrivate }),
         },
         3, // Fewer retries for write operations
         1000 // Longer initial delay
@@ -119,6 +119,29 @@ export const backend = {
     } catch (error) {
       console.error('Error verifying password:', error);
       return false;
+    }
+  },
+
+  // 비공개 메시지 내용 조회 (비밀번호 검증 후)
+  getPrivateContent: async (id: string, password: string): Promise<string | null> => {
+    try {
+      const response = await fetchWithRetry(`${API_BASE_URL}/messages/${id}/content`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ password }),
+      });
+
+      if (!response.ok) {
+        return null;
+      }
+
+      const result = await response.json();
+      return result.content;
+    } catch (error) {
+      console.error('Error getting private content:', error);
+      return null;
     }
   },
 
