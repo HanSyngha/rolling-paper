@@ -1,6 +1,8 @@
 import { Message } from '../types';
 
-const API_BASE_URL = 'http://localhost:3001/api';
+// Use relative URL to work with Vite proxy in development
+// and same-origin deployment in production
+const API_BASE_URL = '/api';
 
 // Retry helper function with exponential backoff
 async function fetchWithRetry(
