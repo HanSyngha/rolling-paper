@@ -52,8 +52,10 @@ check_docker() {
 }
 
 start_services() {
+    local mode="${1:-prod}"  # Default to production mode
+
     print_header
-    print_info "Starting Rolling Paper services..."
+    print_info "Starting Rolling Paper services (${mode} mode)..."
 
     check_docker
 
@@ -85,21 +87,43 @@ start_services() {
         npm install
     fi
 
-    # Start application in background
-    print_info "Starting application server..."
-    npm run dev > /dev/null 2>&1 &
-    APP_PID=$!
-    echo $APP_PID > .app.pid
+    if [ "$mode" = "dev" ]; then
+        # Development mode: Vite dev server + Express
+        print_info "Starting development server..."
+        npm run dev > /dev/null 2>&1 &
+        APP_PID=$!
+        echo $APP_PID > .app.pid
 
-    sleep 3
+        sleep 3
 
-    if ps -p $APP_PID > /dev/null; then
-        print_success "Application started (PID: $APP_PID)"
-        print_success "Frontend: http://localhost:3000"
-        print_success "Backend: http://localhost:3001"
+        if ps -p $APP_PID > /dev/null; then
+            print_success "Application started (PID: $APP_PID)"
+            print_success "Frontend: http://localhost:3000"
+            print_success "Backend: http://localhost:3001"
+        else
+            print_error "Failed to start application"
+            exit 1
+        fi
     else
-        print_error "Failed to start application"
-        exit 1
+        # Production mode: Build frontend + Express serves everything
+        print_info "Building frontend..."
+        npm run build
+
+        print_info "Starting production server..."
+        npm run start > /dev/null 2>&1 &
+        APP_PID=$!
+        echo $APP_PID > .app.pid
+
+        sleep 3
+
+        if ps -p $APP_PID > /dev/null; then
+            print_success "Application started (PID: $APP_PID)"
+            print_success "Access: http://0.0.0.0:3001"
+            print_info "External access: http://genai.samsungds.net:3001"
+        else
+            print_error "Failed to start application"
+            exit 1
+        fi
     fi
 
     echo ""
@@ -225,7 +249,8 @@ show_help() {
     echo "Usage: ./manage.sh [command]"
     echo ""
     echo "Commands:"
-    echo "  start      - Start all services (Docker + Application)"
+    echo "  start      - Start in production mode (port 3001 only, external access)"
+    echo "  start-dev  - Start in development mode (ports 3000 + 3001, localhost only)"
     echo "  stop       - Stop all services"
     echo "  restart    - Restart all services"
     echo "  status     - Show service status"
@@ -235,16 +260,19 @@ show_help() {
     echo "  help       - Show this help message"
     echo ""
     echo "Examples:"
-    echo "  ./manage.sh start     # Start everything"
-    echo "  ./manage.sh stop      # Stop everything"
-    echo "  ./manage.sh logs      # View logs"
+    echo "  ./manage.sh start       # Production: http://genai.samsungds.net:3001"
+    echo "  ./manage.sh start-dev   # Development: http://localhost:3000"
+    echo "  ./manage.sh stop        # Stop everything"
     echo ""
 }
 
 # Main logic
 case "$1" in
     start)
-        start_services
+        start_services "prod"
+        ;;
+    start-dev)
+        start_services "dev"
         ;;
     stop)
         stop_services
