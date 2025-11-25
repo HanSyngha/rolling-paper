@@ -1,44 +1,65 @@
 import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync, readdirSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import pg from 'pg';
+import { createClient } from 'redis';
 import archiver from 'archiver';
 import type { Message } from './types';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
+const { Pool } = pg;
 
 const app = express();
 const PORT = 3001;
 const DOWNLOAD_PASSWORD = 'dt2025-pw';
 
-// ============ SSE & Memory Cache ============
-// In-memory cache for fast reads
-let messagesCache: Message[] = [];
-let cacheInitialized = false;
+// ============ Database Connections ============
+// PostgreSQL connection
+const pgPool = new Pool({
+  host: 'localhost',
+  port: 9700,
+  database: 'rollingpaper',
+  user: 'rollingpaper',
+  password: 'rollingpaper2025',
+  max: 20,
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 2000,
+});
 
-// SSE clients management
+// Redis connection
+const redisClient = createClient({
+  socket: {
+    host: 'localhost',
+    port: 9701,
+  },
+});
+
+redisClient.on('error', (err) => console.error('Redis Client Error', err));
+redisClient.on('connect', () => console.log('✅ Redis connected'));
+
+// Connect to Redis
+await redisClient.connect();
+
+// Test PostgreSQL connection
+pgPool.on('connect', () => {
+  console.log('✅ PostgreSQL connected');
+});
+
+pgPool.on('error', (err) => {
+  console.error('PostgreSQL pool error:', err);
+});
+
+// ============ SSE Clients ============
 const sseClients: Set<express.Response> = new Set();
 
 // Broadcast to all SSE clients
-function broadcastUpdate() {
-  const sanitizedMessages = messagesCache.map(({ passwordHash, ...msg }) => msg);
+async function broadcastUpdate() {
+  const messages = await getMessages();
+  const sanitizedMessages = messages.map(({ passwordHash, ...msg }) => msg);
   const data = JSON.stringify(sanitizedMessages);
 
   sseClients.forEach(client => {
     client.write(`data: ${data}\n\n`);
   });
-}
-
-// Initialize cache from file
-function initializeCache() {
-  if (!cacheInitialized) {
-    messagesCache = readMessagesFromFile();
-    cacheInitialized = true;
-    console.log(`📦 Cache initialized with ${messagesCache.length} messages`);
-  }
 }
 
 // ============ Middleware ============
@@ -50,143 +71,223 @@ app.use(cors({
 }));
 app.use(express.json());
 
-// Message storage paths
-const MESSAGE_DIR = join(__dirname, 'messages');
-const JSONL_FILE = join(MESSAGE_DIR, 'all.jsonl');
+// ============ Helper Functions ============
 
-// Ensure messages directory exists
-if (!existsSync(MESSAGE_DIR)) {
-  mkdirSync(MESSAGE_DIR, { recursive: true });
-}
-
-// Helper: Read all messages from JSONL file (direct file read)
-function readMessagesFromFile(): Message[] {
-  if (!existsSync(JSONL_FILE)) {
-    return [];
-  }
-
-  try {
-    const content = readFileSync(JSONL_FILE, 'utf-8');
-    const messages = content
-      .trim()
-      .split('\n')
-      .filter(line => line.trim() !== '')
-      .map(line => JSON.parse(line) as Message);
-
-    // Return newest first
-    return messages.reverse();
-  } catch (error) {
-    console.error('Error reading messages:', error);
-    return [];
-  }
-}
-
-// Helper: Get messages from cache (fast)
-function getMessages(): Message[] {
-  initializeCache();
-  return messagesCache;
-}
-
-// Helper: Append message to JSONL file
-function appendMessage(message: Message): void {
-  const jsonLine = JSON.stringify(message) + '\n';
-
-  if (existsSync(JSONL_FILE)) {
-    appendFileSync(JSONL_FILE, jsonLine, 'utf-8');
-  } else {
-    writeFileSync(JSONL_FILE, jsonLine, 'utf-8');
-  }
-}
-
-// Helper: Save message to group TXT file (human-readable format)
-function saveToGroupTxt(message: Message): void {
-  const groupTxtFile = join(MESSAGE_DIR, `${message.group}.txt`);
-  const txtLine = `[${message.author}]: ${message.content}\n`;
-
-  if (existsSync(groupTxtFile)) {
-    appendFileSync(groupTxtFile, txtLine, 'utf-8');
-  } else {
-    writeFileSync(groupTxtFile, txtLine, 'utf-8');
-  }
-}
-
-// Helper: Rebuild all group TXT files from current messages
-function rebuildGroupTxtFiles(): void {
-  const messages = getMessages();
-  const groupedMessages: Record<string, Message[]> = {};
-
-  // Group messages by group
-  messages.forEach(msg => {
-    if (!groupedMessages[msg.group]) {
-      groupedMessages[msg.group] = [];
-    }
-    groupedMessages[msg.group].push(msg);
-  });
-
-  // Write each group's TXT file
-  Object.entries(groupedMessages).forEach(([group, msgs]) => {
-    const groupTxtFile = join(MESSAGE_DIR, `${group}.txt`);
-    const content = msgs
-      .reverse() // Oldest first
-      .map(msg => `[${msg.author}]: ${msg.content}`)
-      .join('\n') + '\n';
-
-    writeFileSync(groupTxtFile, content, 'utf-8');
-  });
-}
-
-// Helper: Update entire JSONL file (for likes)
-function updateMessages(messages: Message[]): void {
-  const content = messages.reverse().map(msg => JSON.stringify(msg)).join('\n');
-  writeFileSync(JSONL_FILE, content + '\n', 'utf-8');
-}
-
-// Helper: Hash password
+// Hash password
 function hashPassword(password: string): string {
   return crypto.createHash('sha256').update(password).digest('hex');
 }
 
-// Helper: Verify password
+// Verify password
 function verifyPassword(password: string, hash: string): boolean {
   return hashPassword(password) === hash;
 }
 
-// API Routes
+// Get all messages (with Redis caching)
+async function getMessages(): Promise<Message[]> {
+  try {
+    // Try Redis cache first
+    const cached = await redisClient.get('messages:all');
+    if (cached) {
+      return JSON.parse(cached);
+    }
+
+    // If not in cache, fetch from PostgreSQL
+    const result = await pgPool.query(
+      'SELECT id, author, "group", content, timestamp, likes, password_hash as "passwordHash" FROM messages ORDER BY timestamp DESC'
+    );
+
+    const messages = result.rows as Message[];
+
+    // Update Redis cache (expire after 60 seconds for consistency)
+    await redisClient.setEx('messages:all', 60, JSON.stringify(messages));
+
+    return messages;
+  } catch (error) {
+    console.error('Error getting messages:', error);
+    throw error;
+  }
+}
+
+// Get single message by ID (with Redis caching)
+async function getMessageById(id: string): Promise<Message | null> {
+  try {
+    // Try Redis cache first
+    const cached = await redisClient.get(`message:${id}`);
+    if (cached) {
+      return JSON.parse(cached);
+    }
+
+    // If not in cache, fetch from PostgreSQL
+    const result = await pgPool.query(
+      'SELECT id, author, "group", content, timestamp, likes, password_hash as "passwordHash" FROM messages WHERE id = $1',
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      return null;
+    }
+
+    const message = result.rows[0] as Message;
+
+    // Update Redis cache
+    await redisClient.setEx(`message:${id}`, 300, JSON.stringify(message));
+
+    return message;
+  } catch (error) {
+    console.error('Error getting message by ID:', error);
+    throw error;
+  }
+}
+
+// Invalidate cache
+async function invalidateCache() {
+  try {
+    await redisClient.del('messages:all');
+  } catch (error) {
+    console.error('Error invalidating cache:', error);
+  }
+}
+
+// Add new message to database
+async function addMessage(message: Message): Promise<void> {
+  try {
+    await pgPool.query(
+      'INSERT INTO messages (id, author, "group", content, timestamp, likes, password_hash) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+      [message.id, message.author, message.group, message.content, message.timestamp, message.likes || 0, message.passwordHash || null]
+    );
+
+    // Invalidate cache
+    await invalidateCache();
+  } catch (error) {
+    console.error('Error adding message:', error);
+    throw error;
+  }
+}
+
+// Update message in database
+async function updateMessage(id: string, updates: { author?: string; content?: string }): Promise<void> {
+  try {
+    const fields: string[] = [];
+    const values: any[] = [];
+    let paramCount = 1;
+
+    if (updates.author) {
+      fields.push(`author = $${paramCount++}`);
+      values.push(updates.author);
+    }
+
+    if (updates.content) {
+      fields.push(`content = $${paramCount++}`);
+      values.push(updates.content);
+    }
+
+    values.push(id);
+
+    await pgPool.query(
+      `UPDATE messages SET ${fields.join(', ')} WHERE id = $${paramCount}`,
+      values
+    );
+
+    // Invalidate cache
+    await invalidateCache();
+    await redisClient.del(`message:${id}`);
+  } catch (error) {
+    console.error('Error updating message:', error);
+    throw error;
+  }
+}
+
+// Delete message from database
+async function deleteMessage(id: string): Promise<void> {
+  try {
+    await pgPool.query('DELETE FROM messages WHERE id = $1', [id]);
+
+    // Invalidate cache
+    await invalidateCache();
+    await redisClient.del(`message:${id}`);
+  } catch (error) {
+    console.error('Error deleting message:', error);
+    throw error;
+  }
+}
+
+// Like a message
+async function likeMessage(id: string): Promise<void> {
+  try {
+    await pgPool.query('UPDATE messages SET likes = likes + 1 WHERE id = $1', [id]);
+
+    // Invalidate cache
+    await invalidateCache();
+    await redisClient.del(`message:${id}`);
+  } catch (error) {
+    console.error('Error liking message:', error);
+    throw error;
+  }
+}
+
+// Generate TXT content for a group
+async function generateGroupTxt(group: string): Promise<string> {
+  try {
+    const result = await pgPool.query(
+      'SELECT author, content FROM messages WHERE "group" = $1 ORDER BY timestamp ASC',
+      [group]
+    );
+
+    if (result.rows.length === 0) {
+      return '';
+    }
+
+    return result.rows
+      .map(row => `[${row.author}]: ${row.content}`)
+      .join('\n') + '\n';
+  } catch (error) {
+    console.error('Error generating group TXT:', error);
+    throw error;
+  }
+}
+
+// ============ API Routes ============
 
 // SSE endpoint for real-time updates
-app.get('/api/events', (req, res) => {
+app.get('/api/events', async (req, res) => {
   // Set SSE headers
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.setHeader('Access-Control-Allow-Origin', '*');
 
-  // Send initial data
-  initializeCache();
-  const sanitizedMessages = messagesCache.map(({ passwordHash, ...msg }) => msg);
-  res.write(`data: ${JSON.stringify(sanitizedMessages)}\n\n`);
+  try {
+    // Send initial data
+    const messages = await getMessages();
+    const sanitizedMessages = messages.map(({ passwordHash, ...msg }) => msg);
+    res.write(`data: ${JSON.stringify(sanitizedMessages)}\n\n`);
 
-  // Add client to set
-  sseClients.add(res);
-  console.log(`📡 SSE client connected. Total: ${sseClients.size}`);
+    // Add client to set
+    sseClients.add(res);
+    console.log(`📡 SSE client connected. Total: ${sseClients.size}`);
 
-  // Send heartbeat every 30 seconds to keep connection alive
-  const heartbeat = setInterval(() => {
-    res.write(': heartbeat\n\n');
-  }, 30000);
+    // Send heartbeat every 30 seconds to keep connection alive
+    const heartbeat = setInterval(() => {
+      res.write(': heartbeat\n\n');
+    }, 30000);
 
-  // Remove client on disconnect
-  req.on('close', () => {
-    clearInterval(heartbeat);
-    sseClients.delete(res);
-    console.log(`📡 SSE client disconnected. Total: ${sseClients.size}`);
-  });
+    // Remove client on disconnect
+    req.on('close', () => {
+      clearInterval(heartbeat);
+      sseClients.delete(res);
+      console.log(`📡 SSE client disconnected. Total: ${sseClients.size}`);
+    });
+  } catch (error) {
+    console.error('Error in SSE endpoint:', error);
+    res.status(500).end();
+  }
 });
 
 // Get all messages (without password hashes)
-app.get('/api/messages', (req, res) => {
+app.get('/api/messages', async (req, res) => {
   try {
-    const messages = getMessages();
+    const messages = await getMessages();
     // Remove password hashes before sending to client
     const sanitizedMessages = messages.map(({ passwordHash, ...msg }) => msg);
     res.json(sanitizedMessages);
@@ -197,7 +298,7 @@ app.get('/api/messages', (req, res) => {
 });
 
 // Add new message
-app.post('/api/messages', (req, res) => {
+app.post('/api/messages', async (req, res) => {
   try {
     const { password, ...messageData } = req.body;
     const message: Message = messageData;
@@ -212,17 +313,11 @@ app.post('/api/messages', (req, res) => {
       message.passwordHash = hashPassword(password);
     }
 
-    // Save to JSONL file
-    appendMessage(message);
-
-    // Save to group TXT file
-    saveToGroupTxt(message);
-
-    // Update cache (add to beginning for newest first)
-    messagesCache.unshift(message);
+    // Save to database
+    await addMessage(message);
 
     // Broadcast to all SSE clients
-    broadcastUpdate();
+    await broadcastUpdate();
 
     // Remove password hash before sending response
     const { passwordHash, ...sanitizedMessage } = message;
@@ -234,26 +329,23 @@ app.post('/api/messages', (req, res) => {
 });
 
 // Like a message
-app.post('/api/messages/:id/like', (req, res) => {
+app.post('/api/messages/:id/like', async (req, res) => {
   try {
     const { id } = req.params;
-    const messages = getMessages();
 
-    // Find and update message
-    const messageIndex = messages.findIndex(msg => msg.id === id);
-    if (messageIndex === -1) {
+    const message = await getMessageById(id);
+    if (!message) {
       return res.status(404).json({ error: 'Message not found' });
     }
 
-    messages[messageIndex].likes = (messages[messageIndex].likes || 0) + 1;
-
-    // Update JSONL file
-    updateMessages(messages);
+    await likeMessage(id);
 
     // Broadcast to all SSE clients
-    broadcastUpdate();
+    await broadcastUpdate();
 
-    const { passwordHash, ...sanitizedMessage } = messages[messageIndex];
+    // Get updated message
+    const updatedMessage = await getMessageById(id);
+    const { passwordHash, ...sanitizedMessage } = updatedMessage!;
     res.json(sanitizedMessage);
   } catch (error) {
     console.error('Error liking message:', error);
@@ -262,7 +354,7 @@ app.post('/api/messages/:id/like', (req, res) => {
 });
 
 // Verify password for a message
-app.post('/api/messages/:id/verify', (req, res) => {
+app.post('/api/messages/:id/verify', async (req, res) => {
   try {
     const { id } = req.params;
     const { password } = req.body;
@@ -271,8 +363,7 @@ app.post('/api/messages/:id/verify', (req, res) => {
       return res.status(400).json({ error: 'Password is required' });
     }
 
-    const messages = getMessages();
-    const message = messages.find(msg => msg.id === id);
+    const message = await getMessageById(id);
 
     if (!message) {
       return res.status(404).json({ error: 'Message not found' });
@@ -291,7 +382,7 @@ app.post('/api/messages/:id/verify', (req, res) => {
 });
 
 // Update a message
-app.put('/api/messages/:id', (req, res) => {
+app.put('/api/messages/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { password, author, content } = req.body;
@@ -300,14 +391,11 @@ app.put('/api/messages/:id', (req, res) => {
       return res.status(400).json({ error: 'Password is required' });
     }
 
-    const messages = getMessages();
-    const messageIndex = messages.findIndex(msg => msg.id === id);
+    const message = await getMessageById(id);
 
-    if (messageIndex === -1) {
+    if (!message) {
       return res.status(404).json({ error: 'Message not found' });
     }
-
-    const message = messages[messageIndex];
 
     if (!message.passwordHash) {
       return res.status(403).json({ error: 'This message cannot be edited' });
@@ -318,19 +406,14 @@ app.put('/api/messages/:id', (req, res) => {
     }
 
     // Update message fields
-    if (author) message.author = author;
-    if (content) message.content = content;
-
-    // Update JSONL file
-    updateMessages(messages);
-
-    // Rebuild TXT files
-    rebuildGroupTxtFiles();
+    await updateMessage(id, { author, content });
 
     // Broadcast to all SSE clients
-    broadcastUpdate();
+    await broadcastUpdate();
 
-    const { passwordHash, ...sanitizedMessage } = message;
+    // Get updated message
+    const updatedMessage = await getMessageById(id);
+    const { passwordHash, ...sanitizedMessage } = updatedMessage!;
     res.json(sanitizedMessage);
   } catch (error) {
     console.error('Error updating message:', error);
@@ -339,7 +422,7 @@ app.put('/api/messages/:id', (req, res) => {
 });
 
 // Delete a message
-app.delete('/api/messages/:id', (req, res) => {
+app.delete('/api/messages/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const { password } = req.body;
@@ -348,14 +431,11 @@ app.delete('/api/messages/:id', (req, res) => {
       return res.status(400).json({ error: 'Password is required' });
     }
 
-    const messages = getMessages();
-    const messageIndex = messages.findIndex(msg => msg.id === id);
+    const message = await getMessageById(id);
 
-    if (messageIndex === -1) {
+    if (!message) {
       return res.status(404).json({ error: 'Message not found' });
     }
-
-    const message = messages[messageIndex];
 
     if (!message.passwordHash) {
       return res.status(403).json({ error: 'This message cannot be deleted' });
@@ -365,17 +445,11 @@ app.delete('/api/messages/:id', (req, res) => {
       return res.status(401).json({ error: 'Invalid password' });
     }
 
-    // Remove message from cache
-    messagesCache.splice(messageIndex, 1);
-
-    // Update JSONL file
-    updateMessages(messagesCache);
-
-    // Rebuild TXT files
-    rebuildGroupTxtFiles();
+    // Delete message
+    await deleteMessage(id);
 
     // Broadcast to all SSE clients
-    broadcastUpdate();
+    await broadcastUpdate();
 
     res.json({ message: 'Message deleted successfully' });
   } catch (error) {
@@ -384,8 +458,8 @@ app.delete('/api/messages/:id', (req, res) => {
   }
 });
 
-// Download all TXT files as ZIP
-app.post('/api/download-txt', (req, res) => {
+// Download all TXT files as ZIP (generated from database)
+app.post('/api/download-txt', async (req, res) => {
   try {
     const { password } = req.body;
 
@@ -397,11 +471,15 @@ app.post('/api/download-txt', (req, res) => {
       return res.status(401).json({ error: 'Invalid password' });
     }
 
-    // Get all TXT files
-    const files = readdirSync(MESSAGE_DIR).filter(file => file.endsWith('.txt'));
+    // Get all unique groups from database
+    const groupsResult = await pgPool.query(
+      'SELECT DISTINCT "group" FROM messages ORDER BY "group"'
+    );
 
-    if (files.length === 0) {
-      return res.status(404).json({ error: 'No TXT files found' });
+    const groups = groupsResult.rows.map(row => row.group);
+
+    if (groups.length === 0) {
+      return res.status(404).json({ error: 'No messages found' });
     }
 
     // Set response headers for ZIP download
@@ -422,11 +500,13 @@ app.post('/api/download-txt', (req, res) => {
     // Pipe archive to response
     archive.pipe(res);
 
-    // Add each TXT file to the archive
-    files.forEach(file => {
-      const filePath = join(MESSAGE_DIR, file);
-      archive.file(filePath, { name: file });
-    });
+    // Generate and add each group's TXT file to the archive
+    for (const group of groups) {
+      const content = await generateGroupTxt(group);
+      if (content) {
+        archive.append(content, { name: `${group}.txt` });
+      }
+    }
 
     // Finalize the archive
     archive.finalize();
@@ -437,15 +517,32 @@ app.post('/api/download-txt', (req, res) => {
 });
 
 // Start server - Listen on all network interfaces
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, '0.0.0.0', async () => {
   console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
-  console.log(`📁 Messages stored in: ${MESSAGE_DIR}`);
-
-  // Initialize cache on startup
-  initializeCache();
-
-  // Rebuild TXT files on startup
-  rebuildGroupTxtFiles();
-  console.log(`📝 Group TXT files rebuilt`);
+  console.log(`🗄️  PostgreSQL: localhost:9700`);
+  console.log(`📦 Redis: localhost:9701`);
   console.log(`📡 SSE endpoint ready at /api/events`);
+
+  // Pre-warm cache
+  try {
+    const messages = await getMessages();
+    console.log(`✅ Cache pre-warmed with ${messages.length} messages`);
+  } catch (error) {
+    console.error('Failed to pre-warm cache:', error);
+  }
+});
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  console.log('\n🛑 Shutting down gracefully...');
+  await redisClient.quit();
+  await pgPool.end();
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  console.log('\n🛑 Shutting down gracefully...');
+  await redisClient.quit();
+  await pgPool.end();
+  process.exit(0);
 });
