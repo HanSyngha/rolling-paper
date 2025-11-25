@@ -23,13 +23,18 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.56.1",
+    "@tailwindcss/forms": "^0.5.10",
+    "@tailwindcss/typography": "^0.5.19",
     "@types/archiver": "^7.0.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.5",
     "@types/node": "^22.14.0",
     "@types/pg": "^8.15.6",
     "@vitejs/plugin-react": "^5.0.0",
+    "autoprefixer": "^10.4.22",
     "concurrently": "^9.2.1",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.17",
     "tsx": "^4.20.6",
     "typescript": "~5.8.2",
     "vite": "^6.2.0"
