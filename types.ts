@@ -31,6 +31,7 @@ export interface Message {
   timestamp: number;
   likes: number;
   passwordHash?: string; // Hashed password for edit/delete protection
+  isPrivate?: boolean; // 비공개 메시지 여부
 }
 
 export const GROUPS: Group[] = [

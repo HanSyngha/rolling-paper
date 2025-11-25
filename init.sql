@@ -7,9 +7,18 @@ CREATE TABLE IF NOT EXISTS messages (
     timestamp BIGINT NOT NULL,
     likes INTEGER DEFAULT 0,
     password_hash VARCHAR(255),
+    is_private BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Add is_private column if not exists (for existing databases)
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'messages' AND column_name = 'is_private') THEN
+        ALTER TABLE messages ADD COLUMN is_private BOOLEAN DEFAULT FALSE;
+    END IF;
+END $$;
 
 -- Create index for faster queries
 CREATE INDEX idx_messages_group ON messages("group");

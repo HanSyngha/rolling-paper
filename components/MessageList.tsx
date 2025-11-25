@@ -1,5 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Message, GROUPS } from '../types';
+import { backend } from '../services/backend';
 
 interface MessageListProps {
   messages: Message[];
@@ -9,6 +10,32 @@ interface MessageListProps {
 }
 
 const MessageList: React.FC<MessageListProps> = ({ messages, onLike, onEdit, onDelete }) => {
+  // 비공개 메시지 내용 표시 상태 (메시지 ID -> 내용)
+  const [revealedContents, setRevealedContents] = useState<Record<string, string>>({});
+  // 비밀번호 입력 모달 상태
+  const [passwordModal, setPasswordModal] = useState<{ messageId: string; password: string; error: string } | null>(null);
+  const [isVerifying, setIsVerifying] = useState(false);
+
+  // 비공개 메시지 내용 보기 핸들러
+  const handleRevealContent = async () => {
+    if (!passwordModal) return;
+
+    setIsVerifying(true);
+    try {
+      const content = await backend.getPrivateContent(passwordModal.messageId, passwordModal.password);
+      if (content !== null) {
+        setRevealedContents(prev => ({ ...prev, [passwordModal.messageId]: content }));
+        setPasswordModal(null);
+      } else {
+        setPasswordModal({ ...passwordModal, error: '비밀번호가 일치하지 않습니다.' });
+      }
+    } catch (error) {
+      setPasswordModal({ ...passwordModal, error: '오류가 발생했습니다.' });
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
   if (messages.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center animate-fade-in">
@@ -46,12 +73,37 @@ const MessageList: React.FC<MessageListProps> = ({ messages, onLike, onEdit, onD
                 <span className="text-xs font-semibold text-text-sub uppercase tracking-wider">
                   {groupInfo?.name || 'Unknown Group'}
                 </span>
+                {/* 비공개 배지 */}
+                {msg.isPrivate && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-xs font-medium">
+                    <span className="material-symbols-outlined text-xs">lock</span>
+                    비공개
+                  </span>
+                )}
               </div>
 
               {/* Message Content */}
-              <p className="text-text-main text-base font-medium leading-relaxed mb-6 flex-1 whitespace-pre-line">
-                {msg.content}
-              </p>
+              {msg.isPrivate && !revealedContents[msg.id] ? (
+                // 비공개 메시지 - 내용 숨김
+                <div className="flex-1 mb-6">
+                  <div className="flex flex-col items-center justify-center py-6 px-4 bg-purple-50 rounded-lg border border-purple-100">
+                    <span className="material-symbols-outlined text-3xl text-purple-400 mb-2">visibility_off</span>
+                    <p className="text-purple-600 font-medium mb-3">비공개 글입니다</p>
+                    <button
+                      onClick={() => setPasswordModal({ messageId: msg.id, password: '', error: '' })}
+                      className="px-4 py-2 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 transition-colors flex items-center gap-2"
+                    >
+                      <span className="material-symbols-outlined text-sm">key</span>
+                      내용 보기
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                // 공개 메시지 또는 이미 공개된 비공개 메시지
+                <p className="text-text-main text-base font-medium leading-relaxed mb-6 flex-1 whitespace-pre-line">
+                  {revealedContents[msg.id] || msg.content}
+                </p>
+              )}
 
               {/* Footer: Author & Date */}
               <div className="flex items-end justify-between mt-auto pt-4 border-t border-gray-100">
@@ -95,6 +147,69 @@ const MessageList: React.FC<MessageListProps> = ({ messages, onLike, onEdit, onD
           </div>
         );
       })}
+
+      {/* 비밀번호 입력 모달 */}
+      {passwordModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={() => setPasswordModal(null)}
+          ></div>
+
+          {/* Modal */}
+          <div className="relative bg-white rounded-xl shadow-2xl w-full max-w-sm p-6 animate-slide-up">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center">
+                <span className="material-symbols-outlined text-2xl text-purple-600">lock</span>
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-gray-800">비공개 메시지</h3>
+                <p className="text-sm text-gray-500">비밀번호를 입력해주세요</p>
+              </div>
+            </div>
+
+            <form onSubmit={(e) => { e.preventDefault(); handleRevealContent(); }}>
+              <input
+                type="password"
+                value={passwordModal.password}
+                onChange={(e) => setPasswordModal({ ...passwordModal, password: e.target.value, error: '' })}
+                placeholder="비밀번호"
+                autoFocus
+                className="w-full h-12 px-4 rounded-lg border border-gray-200 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 bg-white transition-all outline-none mb-3"
+              />
+
+              {passwordModal.error && (
+                <p className="text-red-500 text-sm mb-3">{passwordModal.error}</p>
+              )}
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setPasswordModal(null)}
+                  className="flex-1 h-11 rounded-lg border border-gray-200 text-gray-600 font-medium hover:bg-gray-50 transition-colors"
+                >
+                  취소
+                </button>
+                <button
+                  type="submit"
+                  disabled={isVerifying || !passwordModal.password}
+                  className="flex-1 h-11 rounded-lg bg-purple-600 text-white font-medium hover:bg-purple-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {isVerifying ? (
+                    <>
+                      <span className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full"></span>
+                      확인 중...
+                    </>
+                  ) : (
+                    '확인'
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

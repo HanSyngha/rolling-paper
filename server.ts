@@ -87,7 +87,13 @@ const sseClients: Set<express.Response> = new Set();
 // Broadcast to all SSE clients
 async function broadcastUpdate() {
   const messages = await getMessages();
-  const sanitizedMessages = messages.map(({ passwordHash, ...msg }) => msg);
+  const sanitizedMessages = messages.map(({ passwordHash, ...msg }) => {
+    // 비공개 메시지는 내용을 숨김
+    if (msg.isPrivate) {
+      return { ...msg, content: '' };
+    }
+    return msg;
+  });
   const data = JSON.stringify(sanitizedMessages);
 
   sseClients.forEach(client => {
@@ -127,7 +133,7 @@ async function getMessages(): Promise<Message[]> {
 
     // If not in cache, fetch from PostgreSQL
     const result = await pgPool.query(
-      'SELECT id, author, "group", content, timestamp, likes, password_hash as "passwordHash" FROM messages ORDER BY timestamp DESC'
+      'SELECT id, author, "group", content, timestamp, likes, password_hash as "passwordHash", is_private as "isPrivate" FROM messages ORDER BY timestamp DESC'
     );
 
     const messages = result.rows as Message[];
@@ -153,7 +159,7 @@ async function getMessageById(id: string): Promise<Message | null> {
 
     // If not in cache, fetch from PostgreSQL
     const result = await pgPool.query(
-      'SELECT id, author, "group", content, timestamp, likes, password_hash as "passwordHash" FROM messages WHERE id = $1',
+      'SELECT id, author, "group", content, timestamp, likes, password_hash as "passwordHash", is_private as "isPrivate" FROM messages WHERE id = $1',
       [id]
     );
 
@@ -186,8 +192,8 @@ async function invalidateCache() {
 async function addMessage(message: Message): Promise<void> {
   try {
     await pgPool.query(
-      'INSERT INTO messages (id, author, "group", content, timestamp, likes, password_hash) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-      [message.id, message.author, message.group, message.content, message.timestamp, message.likes || 0, message.passwordHash || null]
+      'INSERT INTO messages (id, author, "group", content, timestamp, likes, password_hash, is_private) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+      [message.id, message.author, message.group, message.content, message.timestamp, message.likes || 0, message.passwordHash || null, message.isPrivate || false]
     );
 
     // Invalidate cache
@@ -293,7 +299,13 @@ app.get('/api/events', async (req, res) => {
   try {
     // Send initial data
     const messages = await getMessages();
-    const sanitizedMessages = messages.map(({ passwordHash, ...msg }) => msg);
+    const sanitizedMessages = messages.map(({ passwordHash, ...msg }) => {
+      // 비공개 메시지는 내용을 숨김
+      if (msg.isPrivate) {
+        return { ...msg, content: '' };
+      }
+      return msg;
+    });
     res.write(`data: ${JSON.stringify(sanitizedMessages)}\n\n`);
 
     // Add client to set
@@ -317,12 +329,18 @@ app.get('/api/events', async (req, res) => {
   }
 });
 
-// Get all messages (without password hashes)
+// Get all messages (without password hashes, with private content hidden)
 app.get('/api/messages', async (req, res) => {
   try {
     const messages = await getMessages();
-    // Remove password hashes before sending to client
-    const sanitizedMessages = messages.map(({ passwordHash, ...msg }) => msg);
+    // Remove password hashes and hide private content
+    const sanitizedMessages = messages.map(({ passwordHash, ...msg }) => {
+      // 비공개 메시지는 내용을 숨김
+      if (msg.isPrivate) {
+        return { ...msg, content: '' };
+      }
+      return msg;
+    });
     res.json(sanitizedMessages);
   } catch (error) {
     console.error('Error fetching messages:', error);
@@ -333,12 +351,17 @@ app.get('/api/messages', async (req, res) => {
 // Add new message
 app.post('/api/messages', async (req, res) => {
   try {
-    const { password, ...messageData } = req.body;
-    const message: Message = messageData;
+    const { password, isPrivate, ...messageData } = req.body;
+    const message: Message = { ...messageData, isPrivate: isPrivate || false };
 
     // Validate message
     if (!message.id || !message.author || !message.group || !message.content) {
       return res.status(400).json({ error: 'Invalid message format' });
+    }
+
+    // 비공개 메시지는 반드시 비밀번호가 있어야 함
+    if (message.isPrivate && !password) {
+      return res.status(400).json({ error: '비공개 메시지는 비밀번호가 필요합니다' });
     }
 
     // Hash password if provided
@@ -353,7 +376,12 @@ app.post('/api/messages', async (req, res) => {
 
     // Remove password hash before sending response
     const { passwordHash, ...sanitizedMessage } = message;
-    res.status(201).json(sanitizedMessage);
+    // 비공개 메시지는 응답에서도 내용 숨김
+    if (sanitizedMessage.isPrivate) {
+      res.status(201).json({ ...sanitizedMessage, content: '' });
+    } else {
+      res.status(201).json(sanitizedMessage);
+    }
   } catch (error) {
     console.error('Error adding message:', error);
     res.status(500).json({ error: 'Failed to add message' });
@@ -409,6 +437,43 @@ app.post('/api/messages/:id/verify', async (req, res) => {
   } catch (error) {
     console.error('Error verifying password:', error);
     res.status(500).json({ error: 'Failed to verify password' });
+  }
+});
+
+// Get private message content (비공개 메시지 내용 조회)
+app.post('/api/messages/:id/content', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { password } = req.body;
+
+    if (!password) {
+      return res.status(400).json({ error: 'Password is required' });
+    }
+
+    const message = await getMessageById(id);
+
+    if (!message) {
+      return res.status(404).json({ error: 'Message not found' });
+    }
+
+    if (!message.isPrivate) {
+      // 공개 메시지는 그냥 내용 반환
+      return res.json({ content: message.content });
+    }
+
+    if (!message.passwordHash) {
+      return res.status(403).json({ error: 'This message has no password' });
+    }
+
+    if (!verifyPassword(password, message.passwordHash)) {
+      return res.status(401).json({ error: 'Invalid password' });
+    }
+
+    // 비밀번호가 맞으면 내용 반환
+    res.json({ content: message.content });
+  } catch (error) {
+    console.error('Error getting private message content:', error);
+    res.status(500).json({ error: 'Failed to get message content' });
   }
 });
 
