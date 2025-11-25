@@ -550,7 +550,8 @@ app.post('/api/download-txt', async (req, res) => {
 app.use(express.static(path.join(__dirname, 'dist')));
 
 // Handle SPA routing - serve index.html for all non-API routes
-app.get('*', (req, res) => {
+// Express 5 requires named parameter for wildcard routes
+app.get('/{*splat}', (req, res) => {
   // Only serve index.html for non-API requests
   if (!req.path.startsWith('/api')) {
     res.sendFile(path.join(__dirname, 'dist', 'index.html'));
