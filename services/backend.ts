@@ -201,20 +201,42 @@ export const backend = {
     }
   },
 
-  // Subscribe to changes
+  // Subscribe to changes with polling for cross-tab/browser sync
   subscribe: (callback: (messages: Message[]) => void) => {
+    let lastMessageCount = 0;
+    let lastMessageIds = '';
+
     const handler = async () => {
       const messages = await backend.getMessages();
+
+      // Check if messages have changed (compare count and IDs)
+      const currentIds = messages.map(m => m.id).join(',');
+      if (messages.length !== lastMessageCount || currentIds !== lastMessageIds) {
+        lastMessageCount = messages.length;
+        lastMessageIds = currentIds;
+        callback(messages);
+      }
+    };
+
+    // Handler for local events (same tab)
+    const localHandler = async () => {
+      const messages = await backend.getMessages();
+      lastMessageCount = messages.length;
+      lastMessageIds = messages.map(m => m.id).join(',');
       callback(messages);
     };
 
-    window.addEventListener('message-update', handler);
+    window.addEventListener('message-update', localHandler);
 
     // Initial call
-    handler();
+    localHandler();
+
+    // Poll for changes from other tabs/browsers every 5 seconds
+    const pollInterval = setInterval(handler, 5000);
 
     return () => {
-      window.removeEventListener('message-update', handler);
+      window.removeEventListener('message-update', localHandler);
+      clearInterval(pollInterval);
     };
   }
 };
