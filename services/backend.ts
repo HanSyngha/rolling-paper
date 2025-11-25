@@ -201,42 +201,54 @@ export const backend = {
     }
   },
 
-  // Subscribe to changes with polling for cross-tab/browser sync
+  // Subscribe to changes using SSE (Server-Sent Events) for real-time updates
   subscribe: (callback: (messages: Message[]) => void) => {
-    let lastMessageCount = 0;
-    let lastMessageIds = '';
+    let eventSource: EventSource | null = null;
+    let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
 
-    const handler = async () => {
-      const messages = await backend.getMessages();
-
-      // Check if messages have changed (compare count and IDs)
-      const currentIds = messages.map(m => m.id).join(',');
-      if (messages.length !== lastMessageCount || currentIds !== lastMessageIds) {
-        lastMessageCount = messages.length;
-        lastMessageIds = currentIds;
-        callback(messages);
+    const connect = () => {
+      // Close existing connection if any
+      if (eventSource) {
+        eventSource.close();
       }
+
+      eventSource = new EventSource(`${API_BASE_URL}/events`);
+
+      eventSource.onmessage = (event) => {
+        try {
+          const messages = JSON.parse(event.data) as Message[];
+          callback(messages);
+        } catch (error) {
+          console.error('Error parsing SSE data:', error);
+        }
+      };
+
+      eventSource.onerror = () => {
+        console.log('SSE connection lost, reconnecting in 2s...');
+        eventSource?.close();
+        eventSource = null;
+
+        // Reconnect after 2 seconds
+        reconnectTimeout = setTimeout(connect, 2000);
+      };
+
+      eventSource.onopen = () => {
+        console.log('SSE connection established');
+      };
     };
 
-    // Handler for local events (same tab)
-    const localHandler = async () => {
-      const messages = await backend.getMessages();
-      lastMessageCount = messages.length;
-      lastMessageIds = messages.map(m => m.id).join(',');
-      callback(messages);
-    };
+    // Start connection
+    connect();
 
-    window.addEventListener('message-update', localHandler);
-
-    // Initial call
-    localHandler();
-
-    // Poll for changes from other tabs/browsers every 1 second
-    const pollInterval = setInterval(handler, 1000);
-
+    // Return cleanup function
     return () => {
-      window.removeEventListener('message-update', localHandler);
-      clearInterval(pollInterval);
+      if (reconnectTimeout) {
+        clearTimeout(reconnectTimeout);
+      }
+      if (eventSource) {
+        eventSource.close();
+        eventSource = null;
+      }
     };
   }
 };

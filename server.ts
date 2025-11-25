@@ -14,7 +14,34 @@ const app = express();
 const PORT = 3001;
 const DOWNLOAD_PASSWORD = 'dt2025-pw';
 
-// Middleware - Allow all CORS requests
+// ============ SSE & Memory Cache ============
+// In-memory cache for fast reads
+let messagesCache: Message[] = [];
+let cacheInitialized = false;
+
+// SSE clients management
+const sseClients: Set<express.Response> = new Set();
+
+// Broadcast to all SSE clients
+function broadcastUpdate() {
+  const sanitizedMessages = messagesCache.map(({ passwordHash, ...msg }) => msg);
+  const data = JSON.stringify(sanitizedMessages);
+
+  sseClients.forEach(client => {
+    client.write(`data: ${data}\n\n`);
+  });
+}
+
+// Initialize cache from file
+function initializeCache() {
+  if (!cacheInitialized) {
+    messagesCache = readMessagesFromFile();
+    cacheInitialized = true;
+    console.log(`📦 Cache initialized with ${messagesCache.length} messages`);
+  }
+}
+
+// ============ Middleware ============
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
@@ -32,8 +59,8 @@ if (!existsSync(MESSAGE_DIR)) {
   mkdirSync(MESSAGE_DIR, { recursive: true });
 }
 
-// Helper: Read all messages from JSONL file
-function readMessages(): Message[] {
+// Helper: Read all messages from JSONL file (direct file read)
+function readMessagesFromFile(): Message[] {
   if (!existsSync(JSONL_FILE)) {
     return [];
   }
@@ -52,6 +79,12 @@ function readMessages(): Message[] {
     console.error('Error reading messages:', error);
     return [];
   }
+}
+
+// Helper: Get messages from cache (fast)
+function getMessages(): Message[] {
+  initializeCache();
+  return messagesCache;
 }
 
 // Helper: Append message to JSONL file
@@ -79,7 +112,7 @@ function saveToGroupTxt(message: Message): void {
 
 // Helper: Rebuild all group TXT files from current messages
 function rebuildGroupTxtFiles(): void {
-  const messages = readMessages();
+  const messages = getMessages();
   const groupedMessages: Record<string, Message[]> = {};
 
   // Group messages by group
@@ -120,10 +153,40 @@ function verifyPassword(password: string, hash: string): boolean {
 
 // API Routes
 
+// SSE endpoint for real-time updates
+app.get('/api/events', (req, res) => {
+  // Set SSE headers
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+
+  // Send initial data
+  initializeCache();
+  const sanitizedMessages = messagesCache.map(({ passwordHash, ...msg }) => msg);
+  res.write(`data: ${JSON.stringify(sanitizedMessages)}\n\n`);
+
+  // Add client to set
+  sseClients.add(res);
+  console.log(`📡 SSE client connected. Total: ${sseClients.size}`);
+
+  // Send heartbeat every 30 seconds to keep connection alive
+  const heartbeat = setInterval(() => {
+    res.write(': heartbeat\n\n');
+  }, 30000);
+
+  // Remove client on disconnect
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    sseClients.delete(res);
+    console.log(`📡 SSE client disconnected. Total: ${sseClients.size}`);
+  });
+});
+
 // Get all messages (without password hashes)
 app.get('/api/messages', (req, res) => {
   try {
-    const messages = readMessages();
+    const messages = getMessages();
     // Remove password hashes before sending to client
     const sanitizedMessages = messages.map(({ passwordHash, ...msg }) => msg);
     res.json(sanitizedMessages);
@@ -155,6 +218,12 @@ app.post('/api/messages', (req, res) => {
     // Save to group TXT file
     saveToGroupTxt(message);
 
+    // Update cache (add to beginning for newest first)
+    messagesCache.unshift(message);
+
+    // Broadcast to all SSE clients
+    broadcastUpdate();
+
     // Remove password hash before sending response
     const { passwordHash, ...sanitizedMessage } = message;
     res.status(201).json(sanitizedMessage);
@@ -168,7 +237,7 @@ app.post('/api/messages', (req, res) => {
 app.post('/api/messages/:id/like', (req, res) => {
   try {
     const { id } = req.params;
-    const messages = readMessages();
+    const messages = getMessages();
 
     // Find and update message
     const messageIndex = messages.findIndex(msg => msg.id === id);
@@ -180,6 +249,9 @@ app.post('/api/messages/:id/like', (req, res) => {
 
     // Update JSONL file
     updateMessages(messages);
+
+    // Broadcast to all SSE clients
+    broadcastUpdate();
 
     const { passwordHash, ...sanitizedMessage } = messages[messageIndex];
     res.json(sanitizedMessage);
@@ -199,7 +271,7 @@ app.post('/api/messages/:id/verify', (req, res) => {
       return res.status(400).json({ error: 'Password is required' });
     }
 
-    const messages = readMessages();
+    const messages = getMessages();
     const message = messages.find(msg => msg.id === id);
 
     if (!message) {
@@ -228,7 +300,7 @@ app.put('/api/messages/:id', (req, res) => {
       return res.status(400).json({ error: 'Password is required' });
     }
 
-    const messages = readMessages();
+    const messages = getMessages();
     const messageIndex = messages.findIndex(msg => msg.id === id);
 
     if (messageIndex === -1) {
@@ -255,6 +327,9 @@ app.put('/api/messages/:id', (req, res) => {
     // Rebuild TXT files
     rebuildGroupTxtFiles();
 
+    // Broadcast to all SSE clients
+    broadcastUpdate();
+
     const { passwordHash, ...sanitizedMessage } = message;
     res.json(sanitizedMessage);
   } catch (error) {
@@ -273,7 +348,7 @@ app.delete('/api/messages/:id', (req, res) => {
       return res.status(400).json({ error: 'Password is required' });
     }
 
-    const messages = readMessages();
+    const messages = getMessages();
     const messageIndex = messages.findIndex(msg => msg.id === id);
 
     if (messageIndex === -1) {
@@ -290,14 +365,17 @@ app.delete('/api/messages/:id', (req, res) => {
       return res.status(401).json({ error: 'Invalid password' });
     }
 
-    // Remove message
-    messages.splice(messageIndex, 1);
+    // Remove message from cache
+    messagesCache.splice(messageIndex, 1);
 
     // Update JSONL file
-    updateMessages(messages);
+    updateMessages(messagesCache);
 
     // Rebuild TXT files
     rebuildGroupTxtFiles();
+
+    // Broadcast to all SSE clients
+    broadcastUpdate();
 
     res.json({ message: 'Message deleted successfully' });
   } catch (error) {
@@ -363,7 +441,11 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`🚀 Server running on http://0.0.0.0:${PORT}`);
   console.log(`📁 Messages stored in: ${MESSAGE_DIR}`);
 
+  // Initialize cache on startup
+  initializeCache();
+
   // Rebuild TXT files on startup
   rebuildGroupTxtFiles();
   console.log(`📝 Group TXT files rebuilt`);
+  console.log(`📡 SSE endpoint ready at /api/events`);
 });
