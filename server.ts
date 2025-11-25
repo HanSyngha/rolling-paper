@@ -48,6 +48,34 @@ pgPool.on('error', (err) => {
   console.error('PostgreSQL pool error:', err);
 });
 
+// ============ PostgreSQL LISTEN for real-time notifications ============
+let notificationClient: pg.Client | null = null;
+
+async function setupDatabaseNotifications() {
+  try {
+    notificationClient = await pgPool.connect();
+
+    // Listen to messages_changed channel
+    await notificationClient.query('LISTEN messages_changed');
+
+    notificationClient.on('notification', async (msg) => {
+      if (msg.channel === 'messages_changed') {
+        console.log('📢 Database change detected:', msg.payload);
+
+        // Invalidate cache
+        await invalidateCache();
+
+        // Broadcast to all SSE clients
+        await broadcastUpdate();
+      }
+    });
+
+    console.log('🔔 Database notification listener established');
+  } catch (error) {
+    console.error('Failed to setup database notifications:', error);
+  }
+}
+
 // ============ SSE Clients ============
 const sseClients: Set<express.Response> = new Set();
 
@@ -316,8 +344,7 @@ app.post('/api/messages', async (req, res) => {
     // Save to database
     await addMessage(message);
 
-    // Broadcast to all SSE clients
-    await broadcastUpdate();
+    // Database trigger will automatically broadcast via LISTEN/NOTIFY
 
     // Remove password hash before sending response
     const { passwordHash, ...sanitizedMessage } = message;
@@ -340,8 +367,7 @@ app.post('/api/messages/:id/like', async (req, res) => {
 
     await likeMessage(id);
 
-    // Broadcast to all SSE clients
-    await broadcastUpdate();
+    // Database trigger will automatically broadcast via LISTEN/NOTIFY
 
     // Get updated message
     const updatedMessage = await getMessageById(id);
@@ -408,8 +434,7 @@ app.put('/api/messages/:id', async (req, res) => {
     // Update message fields
     await updateMessage(id, { author, content });
 
-    // Broadcast to all SSE clients
-    await broadcastUpdate();
+    // Database trigger will automatically broadcast via LISTEN/NOTIFY
 
     // Get updated message
     const updatedMessage = await getMessageById(id);
@@ -448,8 +473,7 @@ app.delete('/api/messages/:id', async (req, res) => {
     // Delete message
     await deleteMessage(id);
 
-    // Broadcast to all SSE clients
-    await broadcastUpdate();
+    // Database trigger will automatically broadcast via LISTEN/NOTIFY
 
     res.json({ message: 'Message deleted successfully' });
   } catch (error) {
@@ -523,6 +547,9 @@ app.listen(PORT, '0.0.0.0', async () => {
   console.log(`📦 Redis: localhost:9701`);
   console.log(`📡 SSE endpoint ready at /api/events`);
 
+  // Setup database notification listener for real-time updates
+  await setupDatabaseNotifications();
+
   // Pre-warm cache
   try {
     const messages = await getMessages();
@@ -535,6 +562,9 @@ app.listen(PORT, '0.0.0.0', async () => {
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down gracefully...');
+  if (notificationClient) {
+    notificationClient.release();
+  }
   await redisClient.quit();
   await pgPool.end();
   process.exit(0);
@@ -542,6 +572,9 @@ process.on('SIGINT', async () => {
 
 process.on('SIGTERM', async () => {
   console.log('\n🛑 Shutting down gracefully...');
+  if (notificationClient) {
+    notificationClient.release();
+  }
   await redisClient.quit();
   await pgPool.end();
   process.exit(0);
